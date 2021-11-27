@@ -107,7 +107,7 @@ program finishes calculating the output matrix
 
 AUTHOR
 
-David Gomez on January 29, 2018
+David Gomez
 
 
 
