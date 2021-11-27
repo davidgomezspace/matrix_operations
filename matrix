@@ -1,0 +1,433 @@
+#!/usr/bin/env bash
+
+# use trap command to catch interrupt, hangup and terminate signals, delete any possible temporary
+# files created by this script
+trap "rm -f $tmpInput $tmpCol $tmpRow $tmpTrans $tmpMean $tmpMeanTotal $tmpAdded $tmpLineRowA $tmpLineRowB $tmpRow1 $tmpRow2 $tmpCol $tmpMult; echo 'CTRL+C received. Exit 1.'; exit 1" INT HUP TERM
+
+#if ! [ -t 0 ]
+# temporary file that holds the data from stdin
+tmpInput="./tmpInput$$"
+
+# if file descriptor 0 (stdin) from a terminal, then enter if statement, validate arguments, and 
+#  save stdin stream to tmpInput file
+if [ -t 0 ]
+then
+   # if stdin is from the terminal, and a user selected operations for either dims, transpose,
+   # or mean, then check to see if the arguments present (stored in $#) are greater than 2. If
+   # it is greater than 2, there are too many arguments
+   if [[ $1 == "dims" || $1 == "transpose" || $1 == "mean" ]]
+   then
+      if [ "$#" -gt 2 ]
+      then
+         echo "Error: too many arguments. Exit 1." 1>&2
+         exit 1
+      fi
+   fi
+   # argumenet count is 1, but the file named by argument 1 (referred to by $2) is not readable
+   # file test operator -r, then negate it with ! so you only enter if-statement if file can't be read
+   if ! [ -r "$2" ]
+   then
+      echo -e "Error: cannot read file $2. Exit 1." 1>&2
+      exit 1
+   fi
+   # check to see if there is at least 2 positional parameters
+   if [ "$#" -lt 2 ]
+   then
+      echo "Error: Invalid Selection. Must specify operation and argument. Exit 1." 1>&2
+      exit 1
+   fi
+   # write contents of $2 to tmpInput
+   #echo "contents of positoinal parameter 2 are:"
+   #cat -A $2
+   # read positional parameter and copy contents to tmpInput file
+   while read posLine
+   do
+      echo -e "$posLine" >> $tmpInput
+   done < $2
+   #echo "tmpInput after getting copied from positional parameter 2:"
+   #cat -A $tmpInput
+# if stdin is not from a terminail then copy the stdin stream to file in tmpInput
+else
+   # echo "stdin is not coming from a terminal."
+   while read inputLine
+   do
+      echo -e "$inputLine" >> $tmpInput # must be writteen like this to preserve all characters from stdin
+   done < "/dev/stdin" 
+fi
+ 
+# ==================================================================================================================
+
+# if user/stdin selects dims operation 
+if [ "$1" == "dims" ]
+then
+   # variables that will hold integers corresponding to the number of oolumns and rows contained in a file
+   cols=0
+   rows=0
+   # calculate number of rows by using wc command to count the total number of new line characters (-l option)
+   # in the file specified in $2 (the first argument). This only works if the file's last line
+   # ends with a new line character so wc counts that final newline character as the final row. If the newline
+   # character is missing from the end of the last row, then the row count will be 1 less than true value
+   rows=($(wc -l < $tmpInput))
+   # calculate number of columns in a file specified in $2 by using the head command to cut the first line
+   # (specified by -n 1 option) and then pipe the result as stdin to wc command which counts the wordds (-w option)
+   # to get the column count.  This only works if the first line always has the longest length, which it should
+   # since the input file matrix is assumed to rows of the same length
+   cols=($(head -n 1 < $tmpInput | wc -w))
+   # display the rows and cols variable to the display
+   echo -e "$rows $cols"
+   # remove temporary files used in dims operation
+   rm -f $tmpInput
+   # exit the script, and return value 0 
+   exit 0
+fi
+ 
+# ====================================================================================================================
+
+# if user/stdin selects transpose operation
+if [ "$1" == "transpose" ]
+then
+   # if argument count is greater than 1, exit with return value 1.  This means we ensure there are
+   # values for $0, $1, $2 only, which correspond to script name, operation, and one argument respectively
+   # $# returns an integer corresponding to the number of positional variables that were passed (not 
+   # including $0)
+   #if [ "$#" -gt 2 ]
+   #then
+   #   echo "Error: too many arguments. Exit 1." 1>&2
+   #   exit 1
+   #fi
+   # argumenet count is 1, but the file named by argumen 1 (referred to by $2) is not readable
+   # file test operator -r, then negate it with ! so you only enter if statement if file can't be read
+   #if ! [ -r "$2" ]
+   #then
+   #   echo -e "Error: cannot read file $2. Exit 1." 1>&2
+   #   exit 1
+   #fi
+   # make a temporary file to hold cut columns from input file and also a file to hold transposed matrix. Temp files
+   # must be created in the present directory so that's why ./ is included in the name along with the PID
+   # (represented by $$) to avoid mixing up temp files when running simultaneous programs
+   tmpCol="./tmpCol$$"
+   tmpRow="./tmpRow$$"
+   tmpTrans="./tmpTrans$$"
+   # calculate number of columns in a file specified in $2 by using the head command to take the first line
+   # (specified by -n 1 option) and then pipe the result as stdin to wc command which counts the words (-w option)
+   # to get the column count.  This only works if the first line always has the longest length, which it should
+   # since the input file matrix is assumed to have rows of the same length
+   cols=($(head -n 1 < $tmpInput | wc -w))
+   # declare row variable that holds the number of rows in a file.  Accurate only if the last character of a file
+   # is a newline character when using wc command
+   row=($(wc -l < $tmpInput))
+   # declare loop control variable for iterations through a matrix columns
+   i=1 
+   # while loop iterates through all the columns of the matrix stored in $2 positional parameter.  The strategy is
+   # to cut columns, convert that column to a row, and append that row to a file which holds the resulting 
+   # transposed matrix.  I can only append rows, so that's why I chose to start cutting columns initially to get
+   # into row format
+   while [ $i -le $cols ]  
+   do
+      # using cut command to cut the entire matrix column (indicated by i), then write that column to the file stored
+      # in tmpCol.  Note: -f option for the cut command means field-list, which is separated by tab character by
+      # default
+      cut -f $i $tmpInput > $tmpCol
+      # read each line of a colulmn and append that information to file stored in tmpTrans. Here we are building the
+      # declare loop control variable r which indicates the row being processed
+      r=1 
+      # resulting transpose matrix, and ensuring no tab characters are at the end of each matrix row
+      while read line
+      do
+         # if r is less than row, append the line value to the tmpTrans file, else if r is on the last row of the
+         # column, then append to tmpTrans without appending an additional tab character.  This ensures the 
+         # resulting transposed matrix in tmpTrans will not have a tab character after the last
+         # number in each row.
+         if [ $r -lt $row ]
+         then
+            # append content of current line to file in tmpTrans and use the -n option on echo command to stop from
+            # adding a newline character when appending. Then append a tab caracter and use -ne option on echo
+            # to expand the tab variable and prevent a newline from appendin
+            echo -n "$line" >> $tmpTrans  
+            echo -ne "\t" >> $tmpTrans
+         else
+            # append contents of current line to file in tmpTrans. Note: echo command without options will 
+            # automatically append a newline character.  I can do this because it's the last number to be added
+            # on the resulting matrix so a newline character is needed
+            echo "$line" >> $tmpTrans
+         fi 
+         # increment loop control variable r
+         r=($(expr $r + 1 ))      
+      done < $tmpCol
+      # increment loop control variable
+      i=($(expr $i + 1)) 
+   done
+   # cat the contents of the resulting transposed matrix
+   cat $tmpTrans
+   #cat $tmpCol | tr -s '\n' '\t' > $tmpRow
+   # delete temporary files used in transpose operations
+   rm -f $tmpCol $tmpRow $tmpTrans $tmpInput
+   # return value 0 for successful transpose operation
+   exit 0 
+ fi
+
+# ====================================================================================================================
+
+# if user selects mean operation in $1, enter if statement. 
+if [ "$1" == "mean" ]
+then
+   # if argument count is greater than 1, exit with return value 1.  This means we ensure there are
+   # values for $0, $1, $2 only, which correspond to script name, operation, and one argument respectively
+   # $# returns an integer corresponding to the number of positional variables that were passed (not 
+   # including $0)
+   #if [ "$#" -gt 2 ]
+   #then
+   #   echo "Error: too many arguments. Exit 1." 1>&2
+   #   exit 1
+   #fi
+   # argumenet count is 1, but the file named by argumen 1 (referred to by $2) is not readable
+   # file test operator -r, then negate it with ! so you only enter if statement if file can't be read
+   #if ! [ -r "$2" ]
+   #then
+   #   echo -e "Error: cannot read file $2. Exit 1." 1>&2
+   #   exit 1
+   #fi
+   # calculate number of columns in a file specified in $2 by using the head command to take the first line
+   # (specified by -n 1 option) and then pipe the result as stdin to wc command which counts the words (-w option)
+   # to get the column count.  This only works if the first line always has the longest length, which it should
+   # since the input file matrix is assumed to have rows of the same length
+   cols=($(head -n 1 < $tmpInput | wc -w))
+   # calculate number of rows by using wc command to count the total number of new line characters (-l option)
+   # in the file specified in $2 (the first argument). This only works if the file's last line
+   # ends with a new line character so wc counts that final newline character as the final row. If the newline
+   # character is missing from the end of the last row, then the row count will be 1 less than true value
+   rows=($(wc -l < $tmpInput))
+   tmpMean="./tmpMean$$"
+   tmpMeanTotal="./tmpMeanTotal$$"
+   mean=0
+   i=1
+   colSum=0
+   while [ $i -le $cols ] 
+   do
+      cut -f $i $tmpInput > $tmpMean
+      while read line
+      do
+         for j in $line
+         do
+            colSum=($(expr $colSum + $j))
+            #echo -e "colSum is $colSum"
+         done < $tmpMean 
+
+      done < $tmpMean
+      # rounding whole numbers to within assignment specs
+      #mean=($(expr \( $colSum + \( $rows / 2 \) \) / $rows ))
+      mean=$(( ($colSum + ($rows/2)*( ($colSum>0)*2-1 ))/$rows ))
+      #echo -e "The mean is $mean"
+      # populate the resulting mean matrix
+      if [ $i -lt $cols ]
+      then
+         echo -n "$mean" >> $tmpMeanTotal # echo with -n option means don't add a newline at the end of the stdout
+         echo -ne "\t" >> $tmpMeanTotal # echo with -ne means expand variables and don't add newline at the end
+      else
+         echo "$mean" >> $tmpMeanTotal
+      fi
+
+      i=($(expr $i + 1))
+      colSum=0 # reset to 0 
+   done < $tmpInput
+
+   # cat the rsulting mean stored in tmpMeanTotal
+   cat $tmpMeanTotal
+   # remove temporary files used in calculating the mean
+   rm -f $tmpMeanTotal $tmpMean $tmpInput
+   # return value 0 for successful operation completion
+   exit 0
+fi
+
+# ====================================================================================================================
+
+# if user/stdin selects add operation
+if [ "$1" == "add" ]
+then
+   # add operation only works if there are files passed as arguments for positional variables $2 and $3, which means
+   # the variable $# must equal 3
+   if [ "$#" -ne 3 ]
+   then
+      echo -e "Error: must select 2 matrices for add operation. Exit 1." 1>&2
+      exit 1
+   fi
+   # argumenet count is 2, but the file in positional variable $2 or $3 are not readable
+   # file test operator -r, then negate it with ! so you only enter if statement when either file can't be read
+   if ! [ -r "$2" ]
+   then
+      echo -e "Error: cannot read file $2. Exit 1." 1>&2
+      exit 1
+   fi
+   if ! [ -r "$3" ]
+   then
+      echo -e "Error: cannot read file $3. Exit 1." 1>&2
+      exit 1
+   fi
+   # calculate dimensions for each matrix then store them in variables. Compare matrix dimensions, if not equal then 
+   # program exits
+   rows2=($(wc -l < $2))
+   cols2=($(head -n 1 < $2 | wc -w)) 
+   rows3=($(wc -l < $3))
+   cols3=($(head -n 1 < $3 | wc -w))
+   if [[ $rows2 -ne $rows3 || $cols2 -ne $cols3 ]]
+   then
+      echo "Error: matrices must have equal dimensions for add operation. Exit 1." 1>&2
+      exit 1
+   fi
+   # create temporary files for add operations
+   tmpAdded="./tmpRow$$"
+   tmpLineRowA="./tmpLineRowA$$"
+   tmpLineRowB="./tmpLineRowB$$"
+   while read -r -u 4 line1 && read -r -u 5 line2
+   do
+      echo -e "$line1" > $tmpLineRowA
+      echo -e "$line2" > $tmpLineRowB
+      i=1 # loop control variable
+   while [ $i -lt $cols3 ]
+   do
+      #echo -e "line $i is $line1"
+      a=($( cut -f $i < $tmpLineRowA ))
+      b=($( cut -f $i < $tmpLineRowB ))
+      s=($( expr $a + $b ))
+      #echo -e "a = $a, b = $b, sum = $s"
+      echo -ne "$s" >> $tmpAdded
+      echo -ne "\t" >> $tmpAdded
+      i=$(expr $i + 1) # increment loop control variable
+   done
+   a1=($( cut -f $cols2 < $tmpLineRowA ))
+   b1=($( cut -f $cols3 < $tmpLineRowB ))
+   s1=($( expr $a1 + $b1 ))
+   echo -ne "$s1" >> $tmpAdded
+   echo >> $tmpAdded # short way of appending a newline character to the file stored in tmpAdded
+   done 4<$2 5<$3
+   # cat the resuling matrix stored in tmpAdded
+   cat $tmpAdded
+   # remove temporary files used in add operation
+   rm -f $tmpAdded $tmpLineRowA $tmpLineRowB $tmpInput
+   # return 0 since an operation executed successfully
+   exit 0
+fi
+
+# ====================================================================================================================
+
+# if the user/stdin selects multiply operation
+if [ "$1" == "multiply" ]
+then
+   # add operation only works if there are files passed as arguments for positional variables $2 and $3, which means
+   # the variable $# must equal 3
+   if [ "$#" -ne 3 ]
+   then
+      echo -e "Error: must select 2 matrices for add operation. Exit 1." 1>&2
+      exit 1
+   fi
+   # argumenet count is 2, but the file in positional variable $2 or $3 are not readable
+   # file test operator -r, then negate it with ! so you only enter if statement when either file can't be read
+   if ! [ -r "$2" ]
+   then
+      echo -e "Error: cannot read file $2. Exit 1." 1>&2
+      exit 1
+   fi
+   if ! [ -r "$3" ]
+   then
+      echo -e "Error: cannot read file $3. Exit 1." 1>&2
+      exit 1
+   fi
+   # calculate dimensions for each matrix then store them in variables. Compare matrix dimensions, if not equal then 
+   # program exits
+   rows2=($(wc -l < $2))  # number of rows in first matrix
+   cols2=($(head -n 1 < $2 | wc -w)) # number of columns in first matrix
+   rows3=($(wc -l < $3))  # number of rows in second matrix
+   cols3=($(head -n 1 < $3 | wc -w))  # number of columns in second matrix
+   # in order to multiply two matrices, the number of columns in the first matrix must equal the number of
+   # rows in the second matrix, otherwise there's an error and the script exits
+   if [ $cols2 -ne $rows3 ]
+   then
+      echo "Error: matrix dimensions unsuitable for multiplication. Exit 1." 1>&2
+   exit 1
+   fi
+   # create temporary files used for storing rows and column data at various processing stages
+   tmpRow1="./tmpRow1$$"
+   tmpRow2="./tmpRow2$$"
+   tmpCol="./tmpCol$$"
+   tmpMult="./tmpMult$$"
+   # while loops reads each line of the file stored in $2 and stores each line in $line variable. while loop stops
+   # looping when there are no more lines to read.  one line is stored in $line for every iteration of the loop
+   while read line
+   do
+      # get the line stored in $line and write it to the file stored in tmpRow1
+      echo -e "$line" > $tmpRow1
+      i=1 # represents the column number in the second matrix. It's initiated to one because it starts at first column
+      # while loop that iterates through each column of the second matrix.  when the loop control variable i
+      # is less than or qual to the number of columns in the second matrix (that number is stored in variable cols3) then
+      # the loop stops
+      while [ $i -le $cols3 ] # iterate through each column of second matrix
+      do
+         # get the contents of file stored in $3 (which holds the second matrix), from that file cut the entire 
+         # column that's referred to by variabe i and then write that specific column to the file in tmpCol. The idea here
+         # is that we are cutting a column from the second matrix and writing it to a different file for processing later on
+         cat $3 | cut -f $i > $tmpCol
+         # convert column in tmpCol to a row and write in tmpRow2 file.  Note, the last nmber in the row will contain
+         # have a tab character after it, before a newline character.  This is okay because when we process the row in
+         # file tmpCol, I'll be using commmands that simply look at fields separated by delimiters so it won't  do 
+         # anything with that final tab character
+         cat $tmpCol | tr '\n' '\t' > $tmpRow2
+         # iterate through each row and column element to calculate the dot product
+         e=1  # control variable for dot product element loop
+         # calculate the dot produtct.  This while takes all the elements of a first Matrix row, multiplies the 
+         # element with the corresponding sescond Matrix column (which is stored in tmpRow2 as a row), and then
+         # sums up all those produccts.  The sum get placed as a number in the resultant matrix.  The while loop
+         # is element-pair focused, so it iterates as many times as there are element pairs.  The number of 
+         # elements in the first matrix row is stored in the cols2 variable.   The loop continues to iterate
+         # if the loop control variable is less than or equal to cols2 (in other words, the element-pairs are 
+         # less than or equal to the the number of elements in that particular row or column.
+         while [ $e -le $cols2 ] 
+         do
+            # declare a variable called c2 that holds an element contained in the first Matrix's row
+            c2=($( cut -f $e < $tmpRow1 ))
+            # declare a variable called c3 that holds an element contained in the second Matrix's column
+            # Note: second matrix columns are stored as rows in tmpRow2, to make multiplying easier.
+            c3=($( cut -f $e < $tmpRow2 ))
+            # decare a variable called mult that holds the product of c2 and c3
+            mult=$(( c2 * c3 ))  # why write it like this? Note: clarifyi uses of arithmetic expressions <--------
+            # declare a variable called sum that holds a running sum of all element-pair products.  When the loop
+            # exits, the sum variable contains the value that will be written to the resultant matrix file
+            sum=$(( $sum + $mult ))
+            # increment the loop control variable to the next element-pair can be processed
+            e=$(( $e + 1 ))
+         done
+         # write the sum variable to the file in tmpMult, since that's the file that holds the resultant
+         # matrix I'll eventually display to the user.  To avoid having a tab character at the end of
+         # each resultant matrix row, the if statement checks to see if it's processing the last column in
+         # the second matrix, and if it is, then the final tab character won't be appeneded (in accordance with
+         # the assignment specifications
+         if [ $i -lt $cols3 ]
+         then
+            echo -ne "$sum" >> $tmpMult
+            echo -ne "\t" >> $tmpMult
+         else
+            echo -e "$sum" >> $tmpMult
+         fi
+         # increment the loop control variable so dot products are calculated over all second matrix columns
+         i=$(( $i + 1 ))
+         # reset the sum variable to 0, otherwise the variable will hold a massive running total for all
+         # dot products across all rows and columns
+         sum=0
+      done
+   done < $2  # only read in the first matrix (which is contained in $2 positional parameter) since it contains rows
+              # to copy and process.  The reason I don't feed in the second matrix in $3 variable is because I can
+              # directly process columns individually using the cut command. 'while read line' allows me to 
+              # process individual lines of a file, until all lines are iterated through.
+   # display resulting matrix
+   cat $tmpMult
+   # remove temporary files used in add operation
+   rm -f $tmpMult $tmpRow1 $tmpRow2 $tmpCol $tmpInput
+   # return 0 for a successful operation completion
+   exit 0
+fi
+
+# ====================================================================================================================
+
+# if there are no matches for an operation, then output an error message to
+# stderr and exit with value 1.
+echo "Error: Invalid Selection. No matching operations. Exit 1." 1>&2
+exit 1
